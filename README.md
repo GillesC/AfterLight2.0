@@ -77,16 +77,3 @@ Changing any of these parameters requires rebuilding and uploading the firmware.
 
 **Accuracy notes**
 - The ESP32 ADC is not perfectly linear; this project uses a fixed `ADC_VREF` for a simple estimate. For better accuracy use the `esp_adc_cal` API to calibrate Vref and compensate non-linearity.
-
-**Possible next improvements**
-- Add `esp_adc_cal` based calibration for accurate voltage readings.
-- Implement hysteresis or multi-sample confirmation for VIN threshold transitions to avoid toggling.
-- Expose runtime settings via BLE characteristics for remote tuning.
-
-**License**
-- MIT / no license included — add one if you plan to publish.
-
----
-
-If you want, I can add a short section with the most important macros and where to change them in `src/main.cpp`.
-
