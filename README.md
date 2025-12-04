@@ -12,6 +12,7 @@ ESP32-based BLE RSSI -> LED PWM demonstrator with a flame-like effect and batter
 **Included features**
 - **Hardware PWM (LEDC):** Smooth fades using the LEDC fade API.
 - **EWMA Filtering:** Exponential moving average applied to RSSI for stable brightness control.
+- **Dual RSSI→PWM Mappings:** Choose between linear or gamma (power-curve) mapping to control LED response to RSSI.
 - **Serial Debugging:** Prints events, RSSI, filtered RSSI, LED percent, service UUID and ADC readings only when values change.
 - **Configurable Parameters:** Thresholds, PWM resolution, flame intensity and update rates are defined in `src/main.cpp` for easy tuning.
 
@@ -46,6 +47,12 @@ Or simply use the PlatformIO VSCode extension Run/Upload buttons.
 
 **Configurable parameters (in `src/main.cpp`)**
 Below are the main parameters you can change and their effect on runtime behavior:
+
+- **RSSI → PWM Mapping**
+	- Two functions are provided to map RSSI signal strength to LED brightness:
+	- `rssiToPWM_Linear(int rssi)`: Direct linear mapping. PWM increases proportionally across the full RSSI range.
+	- `rssiToPWM_Gamma(int rssi, float gamma)` and `rssiToPWM_Gamma(int rssi)`: Power-curve (gamma) mapping. With gamma > 1, PWM stays low for poor signals and only increases rapidly when RSSI is very strong. Default gamma = 3.0.
+	- **To switch mapping:** Edit the call in `loop()` (around line 422) from `rssiToPWM_Gamma(...)` to `rssiToPWM_Linear(...)` or vice versa. Also check `handleBattery()` if you want consistent behavior on recovery from low-battery override.
 
 - **LED / PWM**
 	- `LED_PWM_FREQ` (default `1000`): PWM frequency in Hz. Higher values reduce visible flicker but may affect PWM resolution.
