@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include "BLEDevice.h"
 #include "driver/ledc.h"
+#include <math.h>
 
 // ════════════════════════════════════════════════════════════════════
 // USER CONFIGURATION
@@ -15,8 +16,8 @@
 #define LED_PIN GPIO_NUM_13              // Main LED PWM output
 #define LED_BUILTIN GPIO_NUM_4           // Status LED (toggles on BLE RX)
 
-static const int RSSI_MIN = -80;         // Worst signal → LED off
-static const int RSSI_MAX = -30;         // Best signal → LED full brightness
+static const int RSSI_MIN = -100;         // Worst signal → LED off
+static const int RSSI_MAX = -40;         // Best signal → LED full brightness
 static const char *NAME_PREFIX = "Pixel"; // BLE device filter prefix
 static const uint32_t NO_PACKET_TIMEOUT_MS = 1000;  // 1 second TTL
 
@@ -53,7 +54,7 @@ static float lastMeasuredVin = 0.0f;
 // Runtime-configurable maximum LED PWM. Initialize to full-scale based on resolution.
 static uint32_t ORIGINAL_MAX_LED = ((1UL << LED_PWM_RES) - 1);
 static uint32_t MAX_LED = ((1UL << LED_PWM_RES) - 1);
-#define MIN_LED 1                        // 1 (minimum, not off)
+#define MIN_LED 2                        // 1 (minimum, not off)
 
 static const uint32_t FADE_TIME_MS = 500;  // Fade transition duration (ms)
 static int targetPWM = MIN_LED;            // Next PWM from RSSI
@@ -101,18 +102,37 @@ volatile bool ledToggleState = false;        // Status LED state
  * Input:  RSSI in [RSSI_MIN, RSSI_MAX] dBm
  * Output: PWM in [MIN_LED, MAX_LED]
  */
-uint16_t rssiToPWM(int rssi)
+// Two mapping implementations. Call the one you want from `loop()`:
+//   - `rssiToPWM_Linear(int rssi)`
+//   - `rssiToPWM_Gamma(int rssi)`
+
+// Linear mapping: direct proportional mapping from RSSI to PWM
+uint16_t rssiToPWM_Linear(int rssi)
 {
-    // Clamp to valid range
     if (rssi < RSSI_MIN) rssi = RSSI_MIN;
     if (rssi > RSSI_MAX) rssi = RSSI_MAX;
-
-    // Normalize to 0..1
     float norm = float(rssi - RSSI_MIN) / float(RSSI_MAX - RSSI_MIN);
-    
-    // Map to PWM range
-    uint16_t pwm = constrain(int(roundf(norm * MAX_LED)), MIN_LED, MAX_LED);
-    return pwm;
+    uint32_t span = (MAX_LED > MIN_LED) ? (MAX_LED - MIN_LED) : MAX_LED;
+    uint32_t pwm32 = uint32_t(roundf(norm * float(span))) + MIN_LED;
+    return (uint16_t)constrain((int)pwm32, MIN_LED, MAX_LED);
+}
+
+// Gamma mapping: power curve mapping; gamma > 1 makes curve top-heavy
+uint16_t rssiToPWM_Gamma(int rssi, float gamma)
+{
+    if (rssi < RSSI_MIN) rssi = RSSI_MIN;
+    if (rssi > RSSI_MAX) rssi = RSSI_MAX;
+    float norm = float(rssi - RSSI_MIN) / float(RSSI_MAX - RSSI_MIN);
+    float curved = powf(norm, gamma);
+    uint32_t span = (MAX_LED > MIN_LED) ? (MAX_LED - MIN_LED) : MAX_LED;
+    uint32_t pwm32 = uint32_t(roundf(curved * float(span))) + MIN_LED;
+    return (uint16_t)constrain((int)pwm32, MIN_LED, MAX_LED);
+}
+
+// Convenience overload that uses the default gamma (3.0)
+uint16_t rssiToPWM_Gamma(int rssi)
+{
+    return rssiToPWM_Gamma(rssi, 3.0f);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -286,8 +306,8 @@ void handleBattery(float filteredRSSI, uint32_t now)
             // Vin recovered: re-enable normal PWM/fade behavior
             vinOverrideActive = false;
             Serial.println("INFO: Vin recovered - restoring PWM control");
-            // recompute base target from filtered RSSI
-            targetPWM = rssiToPWM(int(filteredRSSI));
+            // recompute base target from filtered RSSI (gamma mapping default)
+            targetPWM = rssiToPWM_Gamma(int(filteredRSSI));
         }
     }
 }
@@ -399,7 +419,7 @@ void loop()
     }
 
     // ─── Convert filtered RSSI to base PWM brightness ───
-    targetPWM = rssiToPWM(int(filteredRSSI));
+    targetPWM = rssiToPWM_Gamma(int(filteredRSSI));
 
     // ─── Flame Effect: Add random pulsing around target brightness ───
     if (now - lastFlameUpdate >= FLAME_UPDATE_INTERVAL_MS)
