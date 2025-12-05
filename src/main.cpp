@@ -18,7 +18,7 @@
 
 static const int RSSI_MIN = -100;         // Worst signal → LED off
 static const int RSSI_MAX = -40;         // Best signal → LED full brightness
-static const char *NAME_PREFIX = "Pixel"; // BLE device filter prefix
+static const char *NAME_PREFIX = "CM3"; // BLE device filter prefix
 static const uint32_t NO_PACKET_TIMEOUT_MS = 1000;  // 1 second TTL
 
 // ════════════════════════════════════════════════════════════════════
@@ -376,8 +376,8 @@ void setup()
     pAdvertising->addServiceUUID(svcUUID);
     
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinInterval(BLE_MS_TO_UNITS(ADV_MIN_INTERVAL_MS));
-    pAdvertising->setMaxInterval(BLE_MS_TO_UNITS(ADV_MAX_INTERVAL_MS));
+    pAdvertising->setMinPreferred(0x90); // 0x06
+    pAdvertising->setMaxPreferred(0x99); // 0x12
     BLEDevice::startAdvertising();
     Serial.println("  Advertising: Started");
 
@@ -427,8 +427,8 @@ void loop()
         lastFlameUpdate = now;
         
         // Generate pseudo-random variation using time + RSSI as seed
-        int16_t flameVar = pseudoRandom(now ^ g_latestRSSI);
-        int flickeredPWM = constrain(targetPWM + flameVar, MIN_LED, MAX_LED);
+        int flameVar = random(targetPWM*0.8);
+        int flickeredPWM = constrain(targetPWM - flameVar, MIN_LED, MAX_LED);
         targetPWM = flickeredPWM;
     }
 
