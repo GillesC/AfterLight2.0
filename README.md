@@ -57,7 +57,7 @@ Below are the main parameters you can change and their effect on runtime behavio
 - **LED / PWM**
 	- `LED_PWM_FREQ` (default `1000`): PWM frequency in Hz. Higher values reduce visible flicker but may affect PWM resolution.
 	- `LED_PWM_RES` (default `16`): PWM resolution in bits. Controls `MAX_LED` range (e.g., 16 → 65535).
-	- `MIN_LED` (default `1`): Minimum non-zero duty used when LED is on.
+	- `MIN_LED` (default `2`): Minimum non-zero duty used when LED is on.
 	- `FADE_TIME_MS` (default `500`): Duration for hardware fade transitions (ms).
 
 - **Flame effect**
@@ -65,7 +65,7 @@ Below are the main parameters you can change and their effect on runtime behavio
 	- `FLAME_UPDATE_INTERVAL_MS` (default `50`): How often the flicker is updated (ms). Lower = faster flicker.
 
 - **RSSI / Filtering**
-	- `RSSI_MIN` / `RSSI_MAX` (defaults `-80` / `-30`): Map RSSI range to LED brightness. Adjust for your environment to change sensitivity.
+	- `RSSI_MIN` / `RSSI_MAX` (defaults `-100` / `-40`): Map RSSI range to LED brightness. Adjust for your environment to change sensitivity.
 	- `alpha` (in loop, default `0.5`): EWMA weight for new RSSI samples (higher = faster reaction).
 	- `beta` (in loop, default `0.2`): Fade-out weight when no packets (smaller = slower decay).
 
@@ -73,8 +73,8 @@ Below are the main parameters you can change and their effect on runtime behavio
 	- `ADC_PIN` (default `35`): ADC input used for voltage sensing (IO35).
 	- `ADC_SAMPLES` (default `16`): Number of ADC samples averaged per read. Increase to reduce noise.
 	- `ADC_VREF` (default `3.30f`): Reference voltage used for simple ADC-to-voltage conversion (approximate).
-	- `VIN_MIN_THRESHOLD` (default `3.7f`): Below this Vin the firmware forces LED to minimum and suspends fading (safety override).
-	- `VIN_REDUCE_THRESHOLD` (default `3.8f`): Below this Vin (but above override) the firmware reduces `MAX_LED` to half to save power.
+	- `VIN_MIN_THRESHOLD` (default `3.2f`): Below this Vin the firmware forces LED to minimum and suspends fading (safety override).
+	- `VIN_REDUCE_THRESHOLD` (default `3.5f`): Below this Vin (but above override) the firmware reduces `MAX_LED` to half to save power.
 	- `ANALOG_READ_INTERVAL_MS` (used inside `handleBattery`, default `1000`): How often to sample the ADC.
 
 - **BLE / Advertising**
