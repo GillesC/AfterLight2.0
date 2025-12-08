@@ -36,10 +36,10 @@ static const uint8_t ADC_SAMPLES = 16; // average samples
 static float lastPrintedVin = -1.0f;
 // VIN safety threshold: when measured Vin < VIN_MIN_THRESHOLD, force LED to MIN and
 // suspend normal PWM/fade behavior to avoid brownout or indicate low battery.
-static const float VIN_MIN_THRESHOLD = 3.7f;
+static const float VIN_MIN_THRESHOLD = 3.2f;
 static bool vinOverrideActive = false;
 // When measured Vin is below this threshold, reduce maximum LED power by half
-static const float VIN_REDUCE_THRESHOLD = 3.8f;
+static const float VIN_REDUCE_THRESHOLD = 3.5f;
 // Last measured Vin (updated by periodic ADC reads)
 static float lastMeasuredVin = 0.0f;
 
@@ -67,6 +67,21 @@ static int lastPWM = -1;                   // Previous PWM (for changes)
 static uint32_t lastFlameUpdate = 0;
 static const uint32_t FLAME_UPDATE_INTERVAL_MS = 50;  // Update rate (20 Hz)
 static const uint16_t FLAME_VARIATION = 500;          // ±500 PWM variation
+
+// Brownian motion flame state
+static int brownianWalk = 0;
+static const int16_t BROWNIAN_STEP_MAX = 100;  // Max step size for smooth walk
+
+// Breathing envelope state
+static uint32_t breathingPhase = 0;
+static const uint32_t BREATHING_CYCLE_MS = 3000;  // 3-second breath cycle
+
+// Temperature decay state
+static uint32_t lastStrongRSSI = 0;
+static const uint32_t TEMPERATURE_DECAY_MS = 5000;  // Fade after 5s of weak signal
+
+// Flame effect selector: 0=Brownian, 1=Breathing, 2=TemperatureDecay
+static uint8_t activeFlameEffect = 2;  // Default: breathing envelope
 
 // ════════════════════════════════════════════════════════════════════
 // RSSI FILTERING & STATE
@@ -136,6 +151,74 @@ uint16_t rssiToPWM_Gamma(int rssi)
 }
 
 // ════════════════════════════════════════════════════════════════════
+// FLAME EFFECT IMPLEMENTATIONS
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Brownian Motion Flame: Smooth random walk for organic drift.
+ * PWM drifts gradually around targetPWM via small random steps.
+ */
+void applyFlameEffect_Brownian(int& targetPWM)
+{
+    // Take a small random step
+    int16_t step = random(2 * BROWNIAN_STEP_MAX + 1) - BROWNIAN_STEP_MAX;
+    brownianWalk += step;
+    
+    // Apply walk offset
+    int flickeredPWM = targetPWM + brownianWalk;
+    flickeredPWM = constrain(flickeredPWM, MIN_LED, MAX_LED);
+    targetPWM = flickeredPWM;
+}
+
+/**
+ * Breathing Envelope Flame: Slow modulation (2–3 sec cycle) with fast flicker on top.
+ * Simulates natural flame breathing/pulsing underneath the flicker.
+ */
+void applyFlameEffect_Breathing(int& targetPWM, uint32_t now)
+{
+    // Slow breathing: sine-like modulation
+    float breathPhase = (float)((now % BREATHING_CYCLE_MS)) / BREATHING_CYCLE_MS * 2.0f * M_PI;
+    float breathModulation = 0.3f + 0.7f * (1.0f + sinf(breathPhase)) / 2.0f;  // 0.3–1.0 range
+    
+    // Fast flicker on top
+    int flameVar = random(FLAME_VARIATION + 1) - (FLAME_VARIATION / 2);
+    int flickeredPWM = constrain(int(targetPWM * breathModulation) + flameVar, MIN_LED, MAX_LED);
+    targetPWM = flickeredPWM;
+}
+
+/**
+ * Temperature Decay Flame: Gradually dims when RSSI is weak (signal lost).
+ * Simulates a flame cooling down when fuel (RSSI) runs low.
+ */
+void applyFlameEffect_TemperatureDecay(int& targetPWM, uint32_t now)
+{
+    // Check if we have strong signal
+    const int STRONG_RSSI_THRESHOLD = -60;  // Arbitrary "good" signal level
+    if (g_latestRSSI > STRONG_RSSI_THRESHOLD)
+    {
+        lastStrongRSSI = now;
+    }
+    
+    // Calculate decay factor based on time since last strong signal
+    uint32_t timeSinceStrong = now - lastStrongRSSI;
+    float decayFactor = 1.0f;
+    if (timeSinceStrong > TEMPERATURE_DECAY_MS)
+    {
+        decayFactor = 0.1f;  // Dim to 10%
+    }
+    else if (timeSinceStrong > TEMPERATURE_DECAY_MS / 2)
+    {
+        // Linear fade from 100% to 10% over the second half of decay window
+        decayFactor = 1.0f - 0.9f * float(timeSinceStrong - TEMPERATURE_DECAY_MS / 2) / float(TEMPERATURE_DECAY_MS / 2);
+    }
+    
+    // Apply decay with normal flicker
+    int flameVar = random(FLAME_VARIATION + 1) - (FLAME_VARIATION / 2);
+    int flickeredPWM = constrain(int(targetPWM * decayFactor) + flameVar, MIN_LED, MAX_LED);
+    targetPWM = flickeredPWM;
+}
+
+// ════════════════════════════════════════════════════════════════════
 // BLE CALLBACK - Device Discovery
 // ════════════════════════════════════════════════════════════════════
 
@@ -201,12 +284,15 @@ void updateLedFade()
     
     lastPWM = targetPWM;
 
+    // Randomize fade time between FADE_TIME_MS and 2*FADE_TIME_MS for organic feel
+    uint32_t randomFadeTime = FADE_TIME_MS + random(FADE_TIME_MS);
+
     // Configure fade with smooth transition
     ledc_set_fade_with_time(
         LEDC_HIGH_SPEED_MODE,
         (ledc_channel_t)LED_PWM_CHANNEL,
         targetPWM,
-        FADE_TIME_MS);
+        randomFadeTime);
 
     // Start fade (non-blocking)
     ledc_fade_start(
@@ -319,7 +405,7 @@ void setup()
 
     Serial.println();
     Serial.println("╔════════════════════════════════════════════════════════╗");
-    Serial.println("║  AfterLight 2.0: BLE RSSI → LED PWM Flame Effect     ║");
+    Serial.println("║  AfterLight 2.0: BLE RSSI → LED PWM Flame Effect       ║");
     Serial.println("╚════════════════════════════════════════════════════════╝");
 
     // ─── GPIO Setup ───
@@ -348,7 +434,8 @@ void setup()
     // ─── ADC Setup for IO35 (voltage divider input) ───
     // Configure ADC resolution and attenuation so the pin can measure up to ~3.3V
     analogReadResolution(12); // 12-bit ADC (0..4095)
-    analogSetPinAttenuation(ADC_PIN, ADC_11db); // full range
+    // analogSetCycles(100);
+    // analogSetPinAttenuation(ADC_PIN, ADC_11db); // full range
     Serial.print("  ADC configured on pin: ");
     Serial.println(ADC_PIN);
 
@@ -376,8 +463,8 @@ void setup()
     pAdvertising->addServiceUUID(svcUUID);
     
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x90); // 0x06
-    pAdvertising->setMaxPreferred(0x99); // 0x12
+    pAdvertising->setMinPreferred(0xFA); // 0x06 // Conn_Interval_Min * 1.25 ms
+    pAdvertising->setMaxPreferred(0x1FE); // 0x12
     BLEDevice::startAdvertising();
     Serial.println("  Advertising: Started");
 
@@ -387,7 +474,7 @@ void setup()
     pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks(), true);
     pBLEScan->setActiveScan(true);
     pBLEScan->setInterval(100);
-    pBLEScan->setWindow(50);
+    pBLEScan->setWindow(99);
     pBLEScan->start(0, nullptr, false);
     Serial.println("  Scanning: Started");
 
@@ -421,15 +508,24 @@ void loop()
     // ─── Convert filtered RSSI to base PWM brightness ───
     targetPWM = rssiToPWM_Gamma(int(filteredRSSI));
 
-    // ─── Flame Effect: Add random pulsing around target brightness ───
+    // ─── Flame Effect: Apply selected effect (Brownian, Breathing, or TemperatureDecay) ───
     if (now - lastFlameUpdate >= FLAME_UPDATE_INTERVAL_MS)
     {
         lastFlameUpdate = now;
         
-        // Generate pseudo-random variation using time + RSSI as seed
-        int flameVar = random(targetPWM*0.8);
-        int flickeredPWM = constrain(targetPWM - flameVar, MIN_LED, MAX_LED);
-        targetPWM = flickeredPWM;
+        // Call the active flame effect function
+        if (activeFlameEffect == 0)
+        {
+            applyFlameEffect_Brownian(targetPWM);
+        }
+        else if (activeFlameEffect == 1)
+        {
+            applyFlameEffect_Breathing(targetPWM, now);
+        }
+        else if (activeFlameEffect == 2)
+        {
+            applyFlameEffect_TemperatureDecay(targetPWM, now);
+        }
     }
 
     // ─── (LED fade will be applied after VIN override check) ───
