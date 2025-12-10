@@ -81,7 +81,7 @@ static uint32_t lastStrongRSSI = 0;
 static const uint32_t TEMPERATURE_DECAY_MS = 5000;  // Fade after 5s of weak signal
 
 // Flame effect selector: 0=Brownian, 1=Breathing, 2=TemperatureDecay
-static uint8_t activeFlameEffect = 2;  // Default: breathing envelope
+static uint8_t activeFlameEffect = 1;  // Default: breathing envelope
 
 // ════════════════════════════════════════════════════════════════════
 // RSSI FILTERING & STATE
