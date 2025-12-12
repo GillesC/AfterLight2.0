@@ -66,7 +66,7 @@ static int lastPWM = -1;                   // Previous PWM (for changes)
 
 static uint32_t lastFlameUpdate = 0;
 static const uint32_t FLAME_UPDATE_INTERVAL_MS = 50;  // Update rate (20 Hz)
-static const uint16_t FLAME_VARIATION = 500;          // ±500 PWM variation
+static const uint16_t FLAME_VARIATION = 100;          // ±500 PWM variation
 
 // Brownian motion flame state
 static int brownianWalk = 0;
@@ -87,8 +87,17 @@ static uint8_t activeFlameEffect = 1;  // Default: breathing envelope
 // RSSI FILTERING & STATE
 // ════════════════════════════════════════════════════════════════════
 
-volatile int g_latestRSSI = RSSI_MIN;                  // Latest RSSI from BLE
-volatile uint32_t lastPacketMillis = 0;               // Last packet timestamp
+// ─────────────────────────────────────────────────────────────
+// RSSI HISTORY (last 10 packets) + MAX
+// ─────────────────────────────────────────────────────────────
+static constexpr uint8_t RSSI_HISTORY_LEN = 10;
+
+volatile int g_rssiHistory[RSSI_HISTORY_LEN];
+volatile uint8_t g_rssiWriteIdx = 0; // next write position
+volatile uint8_t g_rssiCount = 0;    // number of valid entries (<= LEN)
+volatile uint32_t lastPacketMillis = 0;
+
+portMUX_TYPE g_rssiMux = portMUX_INITIALIZER_UNLOCKED;
 
 static int lastPrintedRSSI = INT_MIN;                 // Debug: track print changes
 static float lastPrintedFilteredRSSI = RSSI_MIN;
@@ -120,6 +129,44 @@ volatile bool ledToggleState = false;        // Status LED state
 // Two mapping implementations. Call the one you want from `loop()`:
 //   - `rssiToPWM_Linear(int rssi)`
 //   - `rssiToPWM_Gamma(int rssi)`
+
+static inline void rssiHistoryInit()
+{
+    portENTER_CRITICAL(&g_rssiMux);
+    for (uint8_t i = 0; i < RSSI_HISTORY_LEN; ++i)
+        g_rssiHistory[i] = RSSI_MIN;
+    g_rssiWriteIdx = 0;
+    g_rssiCount = 0;
+    portEXIT_CRITICAL(&g_rssiMux);
+}
+
+static inline void rssiHistoryPush(int rssi)
+{
+    portENTER_CRITICAL(&g_rssiMux);
+    g_rssiHistory[g_rssiWriteIdx] = rssi;
+    g_rssiWriteIdx = (uint8_t)((g_rssiWriteIdx + 1) % RSSI_HISTORY_LEN);
+    if (g_rssiCount < RSSI_HISTORY_LEN)
+        g_rssiCount++;
+    portEXIT_CRITICAL(&g_rssiMux);
+}
+
+static inline int rssiHistoryMax()
+{
+    int maxRssi = RSSI_MIN;
+
+    portENTER_CRITICAL(&g_rssiMux);
+    uint8_t n = g_rssiCount;
+    for (uint8_t i = 0; i < n; ++i)
+    {
+        int v = g_rssiHistory[i];
+        if (v > maxRssi)
+            maxRssi = v;
+    }
+    portEXIT_CRITICAL(&g_rssiMux);
+
+    return maxRssi;
+}
+
 
 // Linear mapping: direct proportional mapping from RSSI to PWM
 uint16_t rssiToPWM_Linear(int rssi)
@@ -178,8 +225,9 @@ void applyFlameEffect_Breathing(int& targetPWM, uint32_t now)
 {
     // Slow breathing: sine-like modulation
     float breathPhase = (float)((now % BREATHING_CYCLE_MS)) / BREATHING_CYCLE_MS * 2.0f * M_PI;
-    float breathModulation = 0.3f + 0.7f * (1.0f + sinf(breathPhase)) / 2.0f;  // 0.3–1.0 range
-    
+    float BEATHING_AMP = 0.8f;
+    float breathModulation = (BEATHING_AMP) + (1-BEATHING_AMP) * (1.0f + sinf(breathPhase)) / 2.0f; // 0.3–1.0 range
+
     // Fast flicker on top
     int flameVar = random(FLAME_VARIATION + 1) - (FLAME_VARIATION / 2);
     int flickeredPWM = constrain(int(targetPWM * breathModulation) + flameVar, MIN_LED, MAX_LED);
@@ -194,7 +242,7 @@ void applyFlameEffect_TemperatureDecay(int& targetPWM, uint32_t now)
 {
     // Check if we have strong signal
     const int STRONG_RSSI_THRESHOLD = -60;  // Arbitrary "good" signal level
-    if (g_latestRSSI > STRONG_RSSI_THRESHOLD)
+    if (rssiHistoryMax() > STRONG_RSSI_THRESHOLD)
     {
         lastStrongRSSI = now;
     }
@@ -241,7 +289,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
 
         // Update RSSI and packet timestamp
         int rssi = advertisedDevice.getRSSI();
-        g_latestRSSI = rssi;
+        rssiHistoryPush(rssi);
         lastPacketMillis = millis();
 
         // Toggle status LED on packet RX
@@ -251,7 +299,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
         Serial.print("RX from ");
         Serial.print(name.c_str());
         Serial.print(" RSSI: ");
-        Serial.println(g_latestRSSI);
+        Serial.println(rssi);
     }
 };
 
@@ -440,6 +488,7 @@ void setup()
     Serial.println(ADC_PIN);
 
     // ─── BLE Initialization ───
+    rssiHistoryInit();
     Serial.println("\n[BLE Setup]");
     String devName = makeDeviceName();
     Serial.print("  Device name: ");
@@ -486,7 +535,7 @@ void loop()
 {
     // ─── RSSI Filtering (Exponential Weighted Moving Average) ───
     static float filteredRSSI = RSSI_MIN;
-    int rssi = g_latestRSSI;
+    int rssi = rssiHistoryMax();
 
     const float alpha = 0.5f;  // Fast response when packets arrive
     const float beta = 0.2f;   // Slow fade when no packets
